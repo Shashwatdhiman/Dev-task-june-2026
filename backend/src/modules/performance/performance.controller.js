@@ -1,4 +1,5 @@
 import { getSupabase } from "../../config/supabase.js";
+import { calculateWorkingMinutes } from "../../utils/businessCalendar.js";
 
 function buildDateRange(query) {
   const now = new Date();
@@ -1002,3 +1003,544 @@ export const getTaskRejectionDetails = async (c) => {
     return c.json({ message: err.message }, 500);
   }
 };
+
+// ─── IST date helpers (mirrors businessCalendar.js internal helpers) ───────────
+
+const TZ = "Asia/Kolkata";
+
+function istDateStr(date) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(date);
+}
+
+/**
+ * Returns [startOfDayIST, endOfDayIST] as Date objects for a given YYYY-MM-DD string.
+ * e.g. "2026-06-19" → [2026-06-19T00:00:00+05:30, 2026-06-19T23:59:59.999+05:30]
+ */
+function istDayBounds(dateStr) {
+  const start = new Date(`${dateStr}T00:00:00+05:30`);
+  const end = new Date(`${dateStr}T23:59:59.999+05:30`);
+  return { start, end };
+}
+
+/**
+ * Returns the IST wall-clock end of the working day as a Date.
+ * e.g. work_end_time = "18:30" → 2026-06-19T18:30:00+05:30
+ */
+function istEndOfWorkday(dateStr, endTime) {
+  const [h, m] = (endTime || "18:30").split(":").map(Number);
+  return new Date(
+    `${dateStr}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00+05:30`
+  );
+}
+
+/**
+ * Compute the pace-estimation status for a member.
+ *
+ * Returns uppercase enum strings — frontend maps these to display labels.
+ *
+ * Thresholds (documented):
+ *   NO_LOAD  – dailyCapacity === 0 OR assignedToday === 0
+ *   DELAYED  – any incomplete task is past its due_date (due_date < referenceTime)
+ *   BEHIND   – remainingMinutes > remainingCapacityFromNow  (can't finish in time)
+ *   AHEAD    – remainingMinutes <= remainingCapacityFromNow * 0.8  (20% buffer)
+ *   ON_TIME  – otherwise
+ *
+ * @param {Date|null} referenceTime  The point in time to judge "overdue" against.
+ *   - If viewing today → pass new Date() (real wall-clock).
+ *   - If viewing a past day → pass end-of-workday for that date,
+ *     so the snapshot reflects how things stood at close of business.
+ *   - If viewing a future day → pass null (skip the DELAYED check entirely;
+ *     the day hasn't happened yet, so no task can be meaningfully overdue).
+ */
+function computeStatus(
+  remaining,
+  assignedMinutes,
+  dailyCapacity,
+  incompleteTasks,
+  remainingCapacityFromNow,
+  referenceTime
+) {
+  if (dailyCapacity === 0 || assignedMinutes === 0) return "NO_LOAD";
+
+  // Only check for overdue tasks when we have a meaningful reference point
+  // (today or past day). For future days referenceTime is null — skip.
+  if (referenceTime) {
+    const hasOverdue = incompleteTasks.some(
+      (t) => t.due_date && new Date(t.due_date) < referenceTime
+    );
+    if (hasOverdue) return "DELAYED";
+  }
+
+  if (remaining > remainingCapacityFromNow) return "BEHIND";
+  if (remaining <= remainingCapacityFromNow * 0.8) return "AHEAD";
+  return "ON_TIME";
+}
+
+/** Derive avatar initials from a display name (up to 2 chars). */
+function avatarInitials(name) {
+  return (name || "?")
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("");
+}
+
+/**
+ * GET /performance/workload-summary?date=YYYY-MM-DD
+ *
+ * Flat response (no wrapping `data` key):
+ *   date, dailyCapacity, isNonWorkingDay, remainingCapacityFromNow,
+ *   summary { memberCount, averageOccupancy, overloadedMembers, delayedMembers },
+ *   members[]
+ *
+ * Per-member shape:
+ *   id, name, role, avatar.initials, capacityMinutes,
+ *   assignedToday, completed.{allocatedMinutes, actualMinutes},
+ *   remainingMinutes, occupancyPct, isOverloaded, status (enum),
+ *   totalTasks, completedCount, incompleteCount
+ *
+ * Capacity is computed via businessCalendar.js (IST, holiday-aware, lunch-aware).
+ * Only tasks whose due_date falls on the target day are counted.
+ * Both manual tasks (is_manual=true) and workflow tasks (instance_id set) are included.
+ */
+export const getWorkloadSummary = async (c) => {
+  try {
+    const companyId = c.get("user").company_id;
+    if (!companyId)
+      return c.json({ message: "Could not determine company" }, 400);
+
+    const supabase = getSupabase(c.env);
+
+    // ── 1. Resolve target date (default: today IST) ──────────────────────────
+    const query = c.req.query();
+    const targetDate = query.date || istDateStr(new Date());
+    const { start: dayStart, end: dayEnd } = istDayBounds(targetDate);
+
+    // ── 2. Fetch company settings ────────────────────────────────────────────
+    const { data: company, error: companyError } = await supabase
+      .from("companies")
+      .select("work_start_time, work_end_time, working_days")
+      .eq("id", companyId)
+      .single();
+
+    if (companyError)
+      return c.json({ message: companyError.message }, 400);
+
+    // ── 3. Fetch holidays ────────────────────────────────────────────────────
+    const { data: holidays } = await supabase
+      .from("company_holidays")
+      .select("holiday_date")
+      .eq("company_id", companyId);
+
+    // ── 4. Compute daily capacity ────────────────────────────────────────────
+    const dailyCapacity = calculateWorkingMinutes(
+      dayStart,
+      dayEnd,
+      company,
+      holidays || []
+    );
+    const isNonWorkingDay = dailyCapacity === 0;
+
+    // ── 5. Remaining capacity from now until end of workday ──────────────────
+    const now = new Date();
+    const todayIst = istDateStr(now);
+    const endOfWorkday = isNonWorkingDay
+      ? null
+      : istEndOfWorkday(targetDate, company?.work_end_time);
+    let remainingCapacityFromNow = 0;
+    // referenceTime: the point-in-time used to judge whether a task is "overdue".
+    //   today  → real wall-clock (now)
+    //   past   → end-of-workday that day  (historical snapshot)
+    //   future → end-of-workday that day
+    let referenceTime = now;
+    if (!isNonWorkingDay && todayIst === targetDate) {
+      // Today — remaining capacity is from now until end of workday
+      if (now < endOfWorkday) {
+        remainingCapacityFromNow = calculateWorkingMinutes(
+          now,
+          endOfWorkday,
+          company,
+          holidays || []
+        );
+      }
+      // referenceTime stays as `now` for today
+    } else if (!isNonWorkingDay && targetDate > todayIst) {
+      // Future day — full capacity remaining, no DELAYED check
+      remainingCapacityFromNow = dailyCapacity;
+      referenceTime = null; // skip DELAYED — day hasn't happened yet
+    } else if (!isNonWorkingDay) {
+      // Past day — historical snapshot at end-of-workday
+      // Use full daily capacity so the status reflects how things stood
+      // at close of business, not "remaining = 0 → everyone is BEHIND".
+      remainingCapacityFromNow = dailyCapacity;
+      referenceTime = endOfWorkday;
+    }
+
+    // ── 6. Fetch members ─────────────────────────────────────────────────────
+    const { data: members, error: membersError } = await supabase
+      .from("users")
+      .select("id, name, platform_role, workflow_role")
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .in("platform_role", ["member", "controller"]);
+
+    if (membersError) return c.json({ message: membersError.message }, 400);
+    if (!members || members.length === 0)
+      return c.json({
+        date: targetDate,
+        dailyCapacity,
+        isNonWorkingDay,
+        remainingCapacityFromNow,
+        summary: { memberCount: 0, averageOccupancy: 0, overloadedMembers: 0, delayedMembers: 0 },
+        members: [],
+      }, 200);
+
+    const memberIds = members.map((m) => m.id);
+
+    // ── 7. Fetch all tasks due on the target day ──────────────────────────────
+    const { data: tasks, error: tasksError } = await supabase
+      .from("tasks")
+      .select(
+        "id, title, status, assigned_user_id, estimated_minutes, total_working_minutes, due_date, is_manual, instance_id"
+      )
+      .eq("company_id", companyId)
+      .in("assigned_user_id", memberIds)
+      .gte("due_date", dayStart.toISOString())
+      .lte("due_date", dayEnd.toISOString());
+
+    if (tasksError) return c.json({ message: tasksError.message }, 400);
+
+    const DONE_STATUSES = ["COMPLETED", "APPROVED"];
+    const INCOMPLETE_STATUSES = [
+      "LOCKED",
+      "IN_PROGRESS",
+      "REJECTED",
+      "PENDING_APPROVAL",
+    ];
+
+    // ── 8. Compute per-member metrics ─────────────────────────────────────────
+    const memberResults = members.map((member) => {
+      const memberTasks = (tasks || []).filter(
+        (t) => t.assigned_user_id === member.id
+      );
+
+      const assignedToday = memberTasks.reduce(
+        (s, t) => s + (t.estimated_minutes || 0),
+        0
+      );
+
+      const completedTasks = memberTasks.filter((t) =>
+        DONE_STATUSES.includes(t.status)
+      );
+      const incompleteTasks = memberTasks.filter((t) =>
+        INCOMPLETE_STATUSES.includes(t.status)
+      );
+
+      const completedAllocatedMinutes = completedTasks.reduce(
+        (s, t) => s + (t.estimated_minutes || 0),
+        0
+      );
+      const completedActualMinutes = completedTasks.reduce(
+        (s, t) => s + (t.total_working_minutes || 0),
+        0
+      );
+      const remainingMinutes = incompleteTasks.reduce(
+        (s, t) => s + (t.estimated_minutes || 0),
+        0
+      );
+
+      const occupancyPct =
+        dailyCapacity > 0
+          ? Math.round((assignedToday / dailyCapacity) * 100)
+          : null;
+      const isOverloaded = occupancyPct !== null && occupancyPct > 100;
+
+      const status = computeStatus(
+        remainingMinutes,
+        assignedToday,
+        dailyCapacity,
+        incompleteTasks,
+        remainingCapacityFromNow,
+        referenceTime
+      );
+
+      return {
+        id: member.id,
+        name: member.name,
+        role: member.workflow_role || member.platform_role,
+        avatar: { initials: avatarInitials(member.name) },
+        capacityMinutes: dailyCapacity,
+        totalTasks: memberTasks.length,
+        completedCount: completedTasks.length,
+        incompleteCount: incompleteTasks.length,
+        assignedToday,
+        completed: {
+          allocatedMinutes: completedAllocatedMinutes,
+          actualMinutes: completedActualMinutes,
+        },
+        remainingMinutes,
+        occupancyPct,
+        isOverloaded,
+        status,
+      };
+    });
+
+    // Sort: DELAYED → BEHIND → highest occupancy → ON_TIME → AHEAD → NO_LOAD
+    const statusOrder = {
+      DELAYED: 0,
+      BEHIND: 1,
+      ON_TIME: 2,
+      AHEAD: 3,
+      NO_LOAD: 4,
+    };
+    memberResults.sort((a, b) => {
+      const oa = statusOrder[a.status] ?? 5;
+      const ob = statusOrder[b.status] ?? 5;
+      if (oa !== ob) return oa - ob;
+      return (b.occupancyPct ?? 0) - (a.occupancyPct ?? 0);
+    });
+
+    // ── 9. Compute summary statistics ─────────────────────────────────────────
+    const loadedMembers = memberResults.filter((m) => m.status !== "NO_LOAD");
+
+    // averageLoadedOccupancy — only members with tasks (the meaningful pace signal)
+    const averageLoadedOccupancy =
+      loadedMembers.length > 0
+        ? Math.round(
+            loadedMembers.reduce((s, m) => s + (m.occupancyPct ?? 0), 0) /
+              loadedMembers.length
+          )
+        : 0;
+
+    // averageOccupancyAllMembers — whole-team view (includes idle members, dilutes the figure)
+    const averageOccupancyAllMembers =
+      memberResults.length > 0
+        ? Math.round(
+            memberResults.reduce((s, m) => s + (m.occupancyPct ?? 0), 0) /
+              memberResults.length
+          )
+        : 0;
+
+    const summary = {
+      memberCount: memberResults.length,
+      // Keep legacy key so existing callers don't break
+      averageOccupancy: averageLoadedOccupancy,
+      averageLoadedOccupancy,
+      averageOccupancyAllMembers,
+      overloadedMembers: memberResults.filter((m) => m.isOverloaded).length,
+      delayedMembers: memberResults.filter((m) => m.status === "DELAYED").length,
+    };
+
+    return c.json(
+      {
+        date: targetDate,
+        dailyCapacity,
+        isNonWorkingDay,
+        remainingCapacityFromNow,
+        summary,
+        members: memberResults,
+      },
+      200
+    );
+  } catch (err) {
+    return c.json({ message: err.message }, 500);
+  }
+};
+
+/**
+ * GET /performance/workload-member/:userId?date=YYYY-MM-DD
+ *
+ * Per-member detail for a single day:
+ *   - taskList: every assigned-today task (title, status, estimated_minutes, due_date, is_manual)
+ *   - completionHistory: COMPLETED/APPROVED tasks with allocated vs. actual minutes
+ *   - Daily totals matching the summary metrics
+ */
+export const getWorkloadMemberDetail = async (c) => {
+  try {
+    const companyId = c.get("user").company_id;
+    if (!companyId)
+      return c.json({ message: "Could not determine company" }, 400);
+
+    const userId = c.req.param("userId");
+    const supabase = getSupabase(c.env);
+
+    // ── 1. Verify member belongs to this company ──────────────────────────────
+    const { data: member, error: memberError } = await supabase
+      .from("users")
+      .select("id, name, platform_role, workflow_role")
+      .eq("id", userId)
+      .eq("company_id", companyId)
+      .single();
+
+    if (memberError || !member)
+      return c.json({ message: "Member not found" }, 404);
+
+    // ── 2. Resolve target date ────────────────────────────────────────────────
+    const query = c.req.query();
+    const targetDate = query.date || istDateStr(new Date());
+    const { start: dayStart, end: dayEnd } = istDayBounds(targetDate);
+
+    // ── 3. Fetch company settings + holidays ──────────────────────────────────
+    const { data: company } = await supabase
+      .from("companies")
+      .select("work_start_time, work_end_time, working_days")
+      .eq("id", companyId)
+      .single();
+
+    const { data: holidays } = await supabase
+      .from("company_holidays")
+      .select("holiday_date")
+      .eq("company_id", companyId);
+
+    const dailyCapacity = calculateWorkingMinutes(
+      dayStart,
+      dayEnd,
+      company,
+      holidays || []
+    );
+    const isNonWorkingDay = dailyCapacity === 0;
+
+    // ── 4. Remaining capacity from now ────────────────────────────────────────
+    const now = new Date();
+    const todayIst = istDateStr(now);
+    const endOfWorkday = isNonWorkingDay
+      ? null
+      : istEndOfWorkday(targetDate, company?.work_end_time);
+    let remainingCapacityFromNow = 0;
+    let referenceTime = now;
+    if (!isNonWorkingDay && todayIst === targetDate) {
+      if (now < endOfWorkday) {
+        remainingCapacityFromNow = calculateWorkingMinutes(
+          now,
+          endOfWorkday,
+          company,
+          holidays || []
+        );
+      }
+    } else if (!isNonWorkingDay && targetDate > todayIst) {
+      remainingCapacityFromNow = dailyCapacity;
+      referenceTime = null; // skip DELAYED — day hasn't happened yet
+    } else if (!isNonWorkingDay) {
+      // Past day — historical snapshot
+      remainingCapacityFromNow = dailyCapacity;
+      referenceTime = endOfWorkday;
+    }
+
+    // ── 5. Fetch tasks due on the target day for this member ──────────────────
+    const { data: tasks, error: tasksError } = await supabase
+      .from("tasks")
+      .select(
+        `id, title, status, estimated_minutes, total_working_minutes,
+         due_date, assigned_at, submitted_at, approved_at,
+         is_manual, instance_id,
+         instance:instance_id(name, client:client_id(name))`
+      )
+      .eq("company_id", companyId)
+      .eq("assigned_user_id", userId)
+      .gte("due_date", dayStart.toISOString())
+      .lte("due_date", dayEnd.toISOString())
+      .order("due_date", { ascending: true });
+
+    if (tasksError) return c.json({ message: tasksError.message }, 400);
+
+    const DONE_STATUSES = ["COMPLETED", "APPROVED"];
+    const INCOMPLETE_STATUSES = [
+      "LOCKED",
+      "IN_PROGRESS",
+      "REJECTED",
+      "PENDING_APPROVAL",
+    ];
+
+    const taskList = (tasks || []).map((t) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      estimated_minutes: t.estimated_minutes || 0,
+      total_working_minutes: t.total_working_minutes || 0,
+      due_date: t.due_date,
+      assigned_at: t.assigned_at || null,
+      submitted_at: t.submitted_at || null,
+      approved_at: t.approved_at || null,
+      is_manual: t.is_manual || false,
+      instance_id: t.instance_id || null,
+      instance_name: t.instance?.name || null,
+      client_name: t.instance?.client?.name || null,
+    }));
+
+    const completionHistory = taskList
+      .filter((t) => DONE_STATUSES.includes(t.status))
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        instance_name: t.instance_name,
+        client_name: t.client_name,
+        allocated_minutes: t.estimated_minutes,
+        actual_minutes: t.total_working_minutes,
+      }));
+
+    // ── 6. Compute totals ─────────────────────────────────────────────────────
+    const assignedToday = taskList.reduce(
+      (s, t) => s + t.estimated_minutes,
+      0
+    );
+    const completedAllocatedMinutes = taskList
+      .filter((t) => DONE_STATUSES.includes(t.status))
+      .reduce((s, t) => s + t.estimated_minutes, 0);
+    const completedActualMinutes = taskList
+      .filter((t) => DONE_STATUSES.includes(t.status))
+      .reduce((s, t) => s + t.total_working_minutes, 0);
+    const remainingMinutes = taskList
+      .filter((t) => INCOMPLETE_STATUSES.includes(t.status))
+      .reduce((s, t) => s + t.estimated_minutes, 0);
+
+    const occupancyPct =
+      dailyCapacity > 0
+        ? Math.round((assignedToday / dailyCapacity) * 100)
+        : null;
+    const isOverloaded = occupancyPct !== null && occupancyPct > 100;
+
+    const incompleteTasks = (tasks || []).filter((t) =>
+      INCOMPLETE_STATUSES.includes(t.status)
+    );
+    const status = computeStatus(
+      remainingMinutes,
+      assignedToday,
+      dailyCapacity,
+      incompleteTasks,
+      remainingCapacityFromNow,
+      referenceTime
+    );
+
+    return c.json(
+      {
+        member: {
+          id: member.id,
+          name: member.name,
+          role: member.workflow_role || member.platform_role,
+          avatar: { initials: avatarInitials(member.name) },
+        },
+        date: targetDate,
+        dailyCapacity,
+        isNonWorkingDay,
+        remainingCapacityFromNow,
+        capacityMinutes: dailyCapacity,
+        assignedToday,
+        completed: {
+          allocatedMinutes: completedAllocatedMinutes,
+          actualMinutes: completedActualMinutes,
+        },
+        remainingMinutes,
+        occupancyPct,
+        isOverloaded,
+        status,
+        taskList,
+        completionHistory,
+      },
+      200
+    );
+  } catch (err) {
+    return c.json({ message: err.message }, 500);
+  }
+};
+

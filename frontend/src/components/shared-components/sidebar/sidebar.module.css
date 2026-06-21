@@ -10,7 +10,7 @@
     background-color: var(--card);
     border-right: 1px solid var(--border);
     transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);
-    overflow: hidden;
+    overflow: visible;
 }
 
 .sidebar.expanded {
@@ -28,6 +28,7 @@
     gap: 12px;
     padding: 20px 16px 16px;
     min-height: 64px;
+    cursor: pointer;
 }
 
 .logoIcon {
@@ -94,9 +95,9 @@
     border: 1px solid var(--border);
     color: var(--muted-foreground);
     cursor: pointer;
-    z-index: 50;
+    z-index: 51;
     transition: all 200ms ease;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 .toggleButton:hover {

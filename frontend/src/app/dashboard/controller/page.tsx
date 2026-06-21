@@ -6,7 +6,7 @@ import { useAuthStore } from '@/lib/zustand/user/user';
 import { useUserStore } from '@/lib/zustand/user/addUser';
 import { useProjectStore } from '@/lib/zustand/projects/createproject';
 import { useTaskStore } from '@/lib/zustand/tasks/tasks';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AccessControlProvider } from '@/lib/contexts/access-control-context';
 import {
 
@@ -39,8 +39,9 @@ import ClientApprovalsTab from '@/components/client-approvals/client-approvals-t
 import { useClientApprovalStore } from '@/lib/zustand/client-approvals/client-approvals';
 import RejectionAnalyticsTab from '@/components/MemberTaskModal/rejection-analytics-tab';
 import SLAExtensionRequestsTab from '@/components/sla-extension/sla-extension-requests-tab';
+import WorkloadManagementTab from '@/components/workload/WorkloadManagementTab';
 import { useSLAExtensionStore } from '@/lib/zustand/sla-extension/sla-extension';
-type Tab = 'overview' | 'users' | 'projects' | 'tasks' | 'clients' | 'permissions' | 'reports' | 'settings' | 'instances' | 'overdue' | 'client-approvals' | 'rejections' | 'sla-requests';
+type Tab = 'overview' | 'users' | 'projects' | 'tasks' | 'clients' | 'permissions' | 'reports' | 'settings' | 'instances' | 'overdue' | 'client-approvals' | 'rejections' | 'sla-requests' | 'workload';
 
 import {
     Users, FolderKanban, CheckSquare, Activity,
@@ -52,9 +53,10 @@ import { HowToModal } from '@/components/how-to/how-to-modal';
 import { useNotificationStore } from '@/lib/zustand/notifications/notifications';
 export default function ControllerDashboard() {
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const activeTab = (searchParams.get('tab') as Tab) || 'instances';
     const { user, isAuthenticated } = useAuthStore();
     const { addToast } = useToast();
-    const [activeTab, setActiveTab] = useState<Tab>('instances');
     const [userSearch, setUserSearch] = useState('');
     const [isAddUserOpen, setIsAddUserOpen] = useState(false);
     const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
@@ -123,18 +125,6 @@ export default function ControllerDashboard() {
                 break;
         }
     }, [activeTab]);
-    // ─── Tabs definition ───
-    const tabs: { key: Tab; label: string }[] = [
-        // { key: 'overview', label: 'Overview' },
-        { key: 'instances', label: 'Instances' },
-        { key: 'clients', label: 'Clients' },
-        { key: 'users', label: 'Users' },
-        { key: 'tasks', label: 'Tasks' },
-        { key: 'overdue', label: 'Overdue Tasks' },
-        { key: 'rejections', label: 'Rejections' },
-        { key: 'sla-requests', label: 'SLA Requests' },
-        { key: 'settings', label: 'Company Settings' },
-    ];
 
     const handleSoftRefresh = async () => {
         fetchStats();
@@ -172,73 +162,6 @@ export default function ControllerDashboard() {
                 break;
         }
     };
-
-    // Stats cards data
-    const statCards = [
-        {
-            label: 'Active Instances',
-            value: stats?.activeInstances || '0',
-            sub: 'Running workflows',
-            icon: <Users className="h-5 w-5 text-blue-600" />,
-            onClick: () => setActiveTab('instances')
-        },
-        {
-            label: 'Team Members',
-            value: stats?.users || '0',
-            sub: 'Active Users',
-            icon: <Users className="h-5 w-5 text-blue-600" />,
-            onClick: () => setActiveTab('users')
-        },
-        // {
-        //     label: 'Task Templates',
-        //     value: stats?.projects || '0',
-        //     sub: 'Active blueprints for Instances',
-        //     icon: <FolderKanban className="h-5 w-5 text-blue-600" />,
-        //     onClick: () => setActiveTab('projects')
-        // },
-        // {
-        //     label: 'Active Tasks',
-        //     value: stats?.activeTasks || '0',
-        //     sub: 'Currently processing',
-        //     icon: <Activity className="h-5 w-5 text-blue-600" />,
-        //     onClick: () => setActiveTab('tasks')
-        // },
-        // {
-        //     label: 'Instance Uptime',
-        //     value: '99.9%',
-        //     sub: 'High availability',
-        //     icon: <Clock className="h-5 w-5 text-blue-600" />,
-        // },
-        {
-            label: 'Overdue Tasks',
-            value: stats?.overdueTasks || '0',
-            sub: 'Tasks past due date',
-            icon: <AlertCircle className="h-5 w-5 text-blue-600" />,
-            onClick: () => setActiveTab('overdue')
-        },
-        {
-            label: 'Task Rejections',
-            value: rejectionCount.toString(),
-            sub: 'Total rejection events',
-            icon: <AlertTriangle className="h-5 w-5 text-red-600" />,
-            onClick: () => setActiveTab('rejections')
-        },
-        {
-            label: 'TAT Extension Requests',
-            value: slaRequestCount.toString(),
-            sub: 'Pending extension requests',
-            icon: <Clock className="h-5 w-5 text-orange-600" />,
-            onClick: () => setActiveTab('sla-requests')
-        },
-        // {
-        //     label: 'Awaiting Client Approvals',
-        //     value: stats?.pendingClientApprovals || '0',
-        //     sub: 'Workflows awaiting client approvals',
-        //     icon: <MessageSquare className="h-5 w-5 text-violet-600" />,
-        //     onClick: () => setActiveTab('client-approvals')
-        // }
-
-    ];
 
     return (
         <AccessControlProvider>
@@ -301,38 +224,7 @@ export default function ControllerDashboard() {
                     </div>
                 </div>
 
-                {/* ─── Top Stats Grid ─── */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 py-3">
-                    {statCards?.map((stat, idx) => (
-                        <Card
-                            key={idx}
-                            onClick={stat.onClick}
-                            className="border-none shadow-sm hover:shadow-md transition-all bg-white p-4 h-full flex flex-col justify-between relative group cursor-pointer"
-                        >
-                            {/* Top row: label + icon */}
-                            <div className="flex items-center justify-between mb-2">
-                                <span className="text-xs font-semibold text-muted-foreground tracking-tight">{stat.label}</span>
-                                <span className="text-muted-foreground/60">{stat.icon}</span>
-                            </div>
-
-                            {/* Big number */}
-                            <div className={cn(
-                                "text-3xl font-extrabold text-foreground leading-none tracking-tight mb-1"
-                            )}>
-                                {stat.value}
-                            </div>
-
-                            {/* Description / subtext */}
-                            {
-                                stat.sub && (
-                                    <p className="text-[11px] text-muted-foreground">{stat.sub}</p>
-                                )
-                            }
-                        </Card>
-                    ))}
-                </div>
-
-
+                {/* Removed Top Stats Grid */}
 
                 {/* ─── Tab Bar (Desktop - Pill Design) ─── */}
                 {/* <div className="hidden md:block mb-8 mt-2 top-[72px] z-30 bg-background/50 backdrop-blur-sm -mx-2 px-2 py-2">
@@ -371,22 +263,7 @@ export default function ControllerDashboard() {
                 </div>
             </div> */}
 
-                {/* ─── Bottom Nav (Mobile only) ─── */}
-                <BottomNav
-                    items={[
-                        { id: 'instances', label: 'Instances', icon: Activity },
-                        { id: 'clients', label: 'Clients', icon: Users },
-                        { id: 'users', label: 'Users', icon: UserIcon },
-                        { id: 'tasks', label: 'Tasks', icon: CheckSquare },
-                        { id: 'overdue', label: 'Overdue', icon: Info },
-                        { id: 'rejections', label: 'Rejections', icon: AlertCircle },
-                        { id: 'sla-requests', label: 'SLA', icon: Clock },
-                        { id: 'client-approvals', label: 'Client', icon: MessageSquare },
-                        { id: 'settings', label: 'Settings', icon: FolderKanban },
-                    ]}
-                    activeId={activeTab}
-                    onTabChange={(id) => setActiveTab(id as Tab)}
-                />
+                {/* Removed Bottom Nav */}
 
                 {/* ─── Tab Content ─── */}
                 {
@@ -395,13 +272,13 @@ export default function ControllerDashboard() {
                             role="controller"
                             stats={stats}
                             onAction={(id) => {
-                                if (id === 'settings') setActiveTab('settings');
-                                if (id === 'reports') setActiveTab('reports');
+                                if (id === 'settings') router.push('/dashboard/controller?tab=settings');
+                                if (id === 'reports') router.push('/dashboard/controller?tab=reports');
                                 if (id === 'new-client') setIsAddClientOpen(true);
                                 if (id === 'add-user') setIsAddUserOpen(true);
-                                if (id === 'users') setActiveTab('users');
-                                if (id === 'tasks') setActiveTab('tasks');
-                                if (id === 'templates') setActiveTab('instances'); // Mapping templates category to instances
+                                if (id === 'users') router.push('/dashboard/controller?tab=users');
+                                if (id === 'tasks') router.push('/dashboard/controller?tab=tasks');
+                                if (id === 'templates') router.push('/dashboard/controller?tab=instances'); // Mapping templates category to instances
                             }}
                         />
                     )
@@ -464,6 +341,13 @@ export default function ControllerDashboard() {
                 {
                     activeTab === 'sla-requests' && (
                         <SLAExtensionRequestsTab />
+                    )
+                }
+
+                {/* Workload Management tab */}
+                {
+                    activeTab === 'workload' && (
+                        <WorkloadManagementTab />
                     )
                 }
 

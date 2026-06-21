@@ -13,6 +13,7 @@ import {
     Calendar,
     Users,
     BarChart3,
+    BarChart2,
     Settings,
     ChevronLeft,
     ChevronRight,
@@ -24,9 +25,13 @@ import {
     CheckSquare2,
     Zap,
     CalendarClock,
+    Activity,
+    AlertCircle,
+    AlertTriangle,
+    Clock,
 } from 'lucide-react';
 import styles from './sidebar.module.css';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { NavItem } from '@/lib/types/auth';
 import ProfileModal from '@/components/profile/profile-modal';
 import { usePermissions } from '@/lib/hooks/usePermissions';
@@ -35,6 +40,7 @@ import { usePermissions } from '@/lib/hooks/usePermissions';
 
 const Sidebar = () => {
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     const router = useRouter();
     const { isCollapsed, toggleSidebar, isMobileOpen, setMobileOpen } = useSidebarStore();
     const { user, logout } = useAuthStore();
@@ -66,7 +72,15 @@ const Sidebar = () => {
             .slice(0, 2)
         : 'U';
 
-    const isActive = (path: string) => pathname === path;
+    const currentTab = searchParams.get('tab');
+
+    const isActive = (path: string) => {
+        if (path.includes('?tab=')) {
+            const urlTab = path.split('?tab=')[1];
+            return pathname === '/dashboard/controller' && currentTab === urlTab;
+        }
+        return pathname === path;
+    };
 
     return (
         <>
@@ -95,7 +109,7 @@ const Sidebar = () => {
                 </button>
 
                 {/* Logo */}
-                <div className={styles.logoArea} onClick={() => handleNavClick('/dashboard')}>
+                <div className={styles.logoArea} onClick={() => handleNavClick('/dashboard/controller?tab=instances')}>
                     <div className={styles.logoIcon}>F</div>
                     <div className={cn(styles.logoText, (isCollapsed && !isMobileOpen) && styles.hidden)}>
                         <span className={styles.logoTitle}>FMS</span>
@@ -109,7 +123,7 @@ const Sidebar = () => {
 
 
                     {/* Dashboard */}
-                    <button
+                    {/* <button
                         onClick={() => handleNavClick('/dashboard')}
                         className={cn(styles.navItem, isActive('/dashboard') && styles.active)}
                     >
@@ -117,11 +131,72 @@ const Sidebar = () => {
                         <span className={cn(styles.navItemLabel, (isCollapsed && !isMobileOpen) && styles.hidden)}>
                             Dashboard
                         </span>
-                    </button>
+                    </button> */}
 
                     {/* Dashboard for Controller */}
                     {(user?.platform_role === 'controller' || (user?.platform_role === 'member' && user?.workflow_role === 'interim_manager')) && (
                         <div>
+                            <button
+                                onClick={() => handleNavClick('/dashboard/controller?tab=instances')}
+                                className={cn(styles.navItem, isActive('/dashboard/controller?tab=instances') && styles.active)}
+                            >
+                                <Activity className="h-5 w-5" />
+                                <span className={cn(styles.navItemLabel, (isCollapsed && !isMobileOpen) && styles.hidden)}>
+                                    Active Instances
+                                </span>
+                            </button>
+
+                            <button
+                                onClick={() => handleNavClick('/dashboard/controller?tab=users')}
+                                className={cn(styles.navItem, isActive('/dashboard/controller?tab=users') && styles.active)}
+                            >
+                                <Users className="h-5 w-5" />
+                                <span className={cn(styles.navItemLabel, (isCollapsed && !isMobileOpen) && styles.hidden)}>
+                                    Team Members
+                                </span>
+                            </button>
+
+                            <button
+                                onClick={() => handleNavClick('/dashboard/controller?tab=overdue')}
+                                className={cn(styles.navItem, isActive('/dashboard/controller?tab=overdue') && styles.active)}
+                            >
+                                <AlertCircle className="h-5 w-5" />
+                                <span className={cn(styles.navItemLabel, (isCollapsed && !isMobileOpen) && styles.hidden)}>
+                                    Overdue Tasks
+                                </span>
+                            </button>
+
+                            <button
+                                onClick={() => handleNavClick('/dashboard/controller?tab=rejections')}
+                                className={cn(styles.navItem, isActive('/dashboard/controller?tab=rejections') && styles.active)}
+                            >
+                                <AlertTriangle className="h-5 w-5" />
+                                <span className={cn(styles.navItemLabel, (isCollapsed && !isMobileOpen) && styles.hidden)}>
+                                    Task Rejections
+                                </span>
+                            </button>
+
+                            <button
+                                onClick={() => handleNavClick('/dashboard/controller?tab=sla-requests')}
+                                className={cn(styles.navItem, isActive('/dashboard/controller?tab=sla-requests') && styles.active)}
+                            >
+                                <Clock className="h-5 w-5" />
+                                <span className={cn(styles.navItemLabel, (isCollapsed && !isMobileOpen) && styles.hidden)}>
+                                    TAT Extension Requests
+                                </span>
+                            </button>
+
+                            <button
+                                onClick={() => handleNavClick('/dashboard/controller?tab=workload')}
+                                className={cn(styles.navItem, isActive('/dashboard/controller?tab=workload') && styles.active)}
+                            >
+                                <BarChart2 className="h-5 w-5" />
+                                <span className={cn(styles.navItemLabel, (isCollapsed && !isMobileOpen) && styles.hidden)}>
+                                    Workload
+                                </span>
+                            </button>
+
+                            {/* Additional Controller Links */}
                             <button
                                 onClick={() => handleNavClick('/dashboard/controller/own-tasks')}
                                 className={cn(styles.navItem, isActive('/dashboard/controller/own-tasks') && styles.active)}

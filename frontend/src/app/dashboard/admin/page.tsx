@@ -31,8 +31,9 @@ import { useStatsStore } from '@/lib/zustand/stats/dashboard-stats';
 import OverviewTab from '@/components/dashboard/overview-tab';
 import { useInstanceStore } from '@/lib/zustand/instances/instances';
 import ControllerPerformance from '@/components/dashboard/controller-performance';
+import WorkloadManagementTab from '@/components/workload/WorkloadManagementTab';
 
-type Tab = 'users' | 'tasks' | 'clients' | 'templates' | 'permissions' | 'reports' | 'settings' | 'holidays' | 'performance';
+type Tab = 'users' | 'tasks' | 'clients' | 'templates' | 'permissions' | 'reports' | 'settings' | 'holidays' | 'performance' | 'workload';
 
 
 export default function AdminDashboard() {
@@ -102,6 +103,7 @@ export default function AdminDashboard() {
         { key: 'clients', label: 'Clients' },
         { key: 'permissions', label: 'Permissions' },
         { key: 'performance', label: 'Performance' },
+        { key: 'workload', label: 'Workload' },
         { key: 'reports', label: 'Reports' },
         { key: 'settings', label: 'Settings' },];
 
@@ -357,6 +359,7 @@ export default function AdminDashboard() {
                     // { id: 'tasks', label: 'Tasks', icon: CheckSquare },
                     { id: 'clients', label: 'Clients', icon: Activity },
                     { id: 'reports', label: 'Reports', icon: BarChart3 },
+                    { id: 'workload', label: 'Workload', icon: Activity },
                     { id: 'permissions', label: 'Permissions', icon: Shield },
                     { id: 'settings', label: 'Settings', icon: Settings },
                 ]}
@@ -385,6 +388,12 @@ export default function AdminDashboard() {
             {
                 activeTab === 'performance' && (
                     <ControllerPerformance />
+                )
+            }
+
+            {
+                activeTab === 'workload' && (
+                    <WorkloadManagementTab />
                 )
             }
 

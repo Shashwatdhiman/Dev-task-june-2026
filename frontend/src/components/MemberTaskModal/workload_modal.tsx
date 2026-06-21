@@ -287,16 +287,19 @@ export default function WorkloadTab() {
                 <div className="h-px bg-border/50 my-4" />
 
                 {/* Quick date buttons */}
+                {/* Quick date buttons */}
                 <div className="flex flex-wrap gap-2 mb-3">
                     {DATE_FILTERS.map(opt => {
                         const dateVal = getDateForOffset(opt.offset);
-                        const isActive = !customMode && selectedDate === dateVal;
+                        const isActive = (!customMode && selectedDate === dateVal) || (customMode && customFrom === customTo && customFrom === dateVal);
                         return (
                             <button
                                 key={opt.offset}
                                 onClick={() => {
                                     setCustomMode(false);
                                     setSelectedDate(dateVal);
+                                    setCustomFrom(dateVal);
+                                    setCustomTo(dateVal);
                                 }}
                                 className={`px-3 py-1.5 text-xs rounded-md border font-medium transition-colors ${isActive
                                     ? "bg-foreground text-background border-foreground"
@@ -309,7 +312,7 @@ export default function WorkloadTab() {
                     })}
                     <button
                         onClick={() => setCustomMode(true)}
-                        className={`px-3 py-1.5 text-xs rounded-md border font-medium transition-colors ${customMode
+                        className={`px-3 py-1.5 text-xs rounded-md border font-medium transition-colors ${customMode && !(customFrom === customTo && DATE_FILTERS.some(opt => getDateForOffset(opt.offset) === customFrom))
                             ? "bg-foreground text-background border-foreground"
                             : "bg-background text-foreground border-border hover:border-foreground"
                             }`}
@@ -324,14 +327,34 @@ export default function WorkloadTab() {
                         <input
                             type="date"
                             value={customFrom}
-                            onChange={e => setCustomFrom(e.target.value)}
+                            onChange={e => {
+                                const val = e.target.value;
+                                setCustomFrom(val);
+                                if (val === customTo) {
+                                    setSelectedDate(val);
+                                    const matchingQuick = DATE_FILTERS.find(opt => getDateForOffset(opt.offset) === val);
+                                    if (matchingQuick) {
+                                        setCustomMode(false);
+                                    }
+                                }
+                            }}
                             className="px-3 py-1.5 text-xs rounded-md border border-border bg-background text-foreground"
                         />
                         <span className="text-xs text-muted-foreground">to</span>
                         <input
                             type="date"
                             value={customTo}
-                            onChange={e => setCustomTo(e.target.value)}
+                            onChange={e => {
+                                const val = e.target.value;
+                                setCustomTo(val);
+                                if (customFrom === val) {
+                                    setSelectedDate(val);
+                                    const matchingQuick = DATE_FILTERS.find(opt => getDateForOffset(opt.offset) === val);
+                                    if (matchingQuick) {
+                                        setCustomMode(false);
+                                    }
+                                }
+                            }}
                             className="px-3 py-1.5 text-xs rounded-md border border-border bg-background text-foreground"
                         />
                     </div>
